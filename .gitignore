@@ -1,3 +1,5 @@
 *_Plan.md
 .bob/
 bob_session/
+__pycache__/
+*.pyc
