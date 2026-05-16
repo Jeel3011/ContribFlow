@@ -1,6 +1,5 @@
 *_Plan.md
 .bob/
-bob_session/
 __pycache__/
 */__pycache__/
 **/__pycache__/
@@ -11,3 +10,5 @@ venv/
 .env
 */.env
 **/.env
+scratch*.py
+*.json
