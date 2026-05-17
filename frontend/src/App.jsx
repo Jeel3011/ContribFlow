@@ -384,16 +384,17 @@ function Orchestrator({ repoUrl, workflowMode }) {
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
+
       let buffer = "";
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        
+
         const parts = buffer.split("\n\n");
-        buffer = parts.pop(); // Keep the last incomplete part in the buffer
-        
+        buffer = parts.pop();
+
         for (const part of parts) {
           const lines = part.split("\n").filter(l => l.startsWith("data: "));
           for (const line of lines) {
@@ -1142,58 +1143,7 @@ const TABS = [
   { id: "prepr",        label: "Pre-PR Check",  sub: "Catch issues before CI does" },
 ];
 
-// ─── Error Boundary ─────────────────────────────────────────────────────────────
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null, errorInfo: null };
-  }
-
-  static getDerivedStateFromError(error) {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error, errorInfo) {
-    this.setState({ error, errorInfo });
-    console.error("ErrorBoundary caught an error", error, errorInfo);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div style={{ padding: 40, background: "#FEF2F2", color: "#991B1B", fontFamily: "monospace", minHeight: "100vh" }}>
-          <h2 style={{ color: "#7F1D1D", marginTop: 0 }}>🚨 FATAL REACT CRASH 🚨</h2>
-          <p>Please share this exact error message with the AI:</p>
-          <div style={{ background: "#FEE2E2", padding: 20, borderRadius: 8, border: "1px solid #FCA5A5", overflowX: "auto" }}>
-            <strong>{this.state.error && this.state.error.toString()}</strong>
-            <br />
-            <br />
-            <pre style={{ fontSize: 12, margin: 0 }}>
-              {this.state.errorInfo && this.state.errorInfo.componentStack}
-            </pre>
-          </div>
-          <button 
-            onClick={() => window.location.reload()} 
-            style={{ marginTop: 20, padding: "10px 20px", background: "#EF4444", color: "white", border: "none", borderRadius: 6, cursor: "pointer", fontWeight: "bold" }}>
-            Reload Page
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-// Wrap the main app with ErrorBoundary
-export default function AppWrapper() {
-  return (
-    <ErrorBoundary>
-      <ContribFlow />
-    </ErrorBoundary>
-  );
-}
-
-function ContribFlow() {
+export default function ContribFlow() {
   const [repoUrl, setRepoUrl] = useState("");
   const [activeTab, setActiveTab] = useState("orchestrator");
   const [repoValid, setRepoValid] = useState(null);

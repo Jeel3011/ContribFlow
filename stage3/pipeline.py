@@ -217,7 +217,7 @@ def run_stage3(repo_url: str, change_description: str, diff: str = "") -> dict:
         Structured JSON output matching Stage 3 schema
     """
     # Extract owner/repo from URL
-    owner_repo = repo_url.replace("https://github.com/", "").strip("/")
+    owner_repo = repo_url.split("github.com/")[-1].strip("/")
     
     try:
         # Run static analysis FIRST (before AI)

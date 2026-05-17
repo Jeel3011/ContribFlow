@@ -95,7 +95,7 @@ def run_stage1(repo_url: str, bob_response: Optional[str] = None) -> dict:
         Exception: If GitHub API fails or rate limit is hit
     """
     # Extract owner/repo from URL
-    owner_repo = repo_url.replace("https://github.com/", "").strip("/")
+    owner_repo = repo_url.split("github.com/")[-1].strip("/")
     
     print(f"[Stage 1] Analyzing repository: {owner_repo}")
     

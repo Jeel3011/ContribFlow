@@ -64,7 +64,7 @@ def run_stage2(repo_url: str, idea: str) -> dict:
         Exception: If GitHub API fails or rate limit is hit
     """
     # Extract owner/repo from URL
-    owner_repo = repo_url.replace("https://github.com/", "").strip("/")
+    owner_repo = repo_url.split("github.com/")[-1].strip("/")
     
     # Fetch issues and PRs from GitHub
     issues = get_issues(owner_repo, max_issues=50)

@@ -331,6 +331,20 @@ def create_orchestrator_graph() -> StateGraph:
     return workflow.compile()
 
 
+import threading
+
+_thread_locals = threading.local()
+
+class EventList(list):
+    def append(self, item):
+        super().append(item)
+        cb = getattr(_thread_locals, "event_callback", None)
+        if cb:
+            try:
+                cb(item)
+            except Exception as e:
+                logger.error(f"Error in EventList callback: {e}")
+
 # ─── Main Execution Entry Points ──────────────────────────────────────────────
 
 def run_orchestrator_sync(
@@ -344,7 +358,10 @@ def run_orchestrator_sync(
     Returns the full final state including all stage results and events.
     """
     repo_url = repo_url.strip()
-    owner_repo = repo_url.replace("https://github.com/", "").strip("/")
+    # Robust URL normalization: extract owner/repo regardless of typos in protocol
+    owner_repo = repo_url.split("github.com/")[-1].strip("/")
+    # Rebuild a clean URL so all downstream stages get a valid URL
+    repo_url = f"https://github.com/{owner_repo}"
 
     initial_state: OrchestratorState = {
         "repo_url": repo_url,
@@ -357,7 +374,7 @@ def run_orchestrator_sync(
         "stage3_result": {},
         "stage4_result": {},
         "current_stage": "idle",
-        "events": [],
+        "events": EventList(),
         "error": "",
         "stop_reason": ""
     }
@@ -375,20 +392,34 @@ async def stream_orchestrator(
 ) -> AsyncIterator[str]:
     """
     Async generator that yields SSE-formatted events as the orchestrator runs.
-    Streams each stage's events as they complete.
+    Streams each stage's events as they happen in real-time.
     """
     loop = asyncio.get_event_loop()
+    q = asyncio.Queue()
 
-    # Run synchronously in thread pool to avoid blocking
-    final_state = await loop.run_in_executor(
-        None,
-        run_orchestrator_sync,
-        repo_url, user_idea, diff, workflow_mode
-    )
+    def sync_callback(event):
+        # Schedule the push to the async queue from the synchronous thread
+        loop.call_soon_threadsafe(q.put_nowait, event)
 
-    # Yield all accumulated events
-    for event in final_state.get("events", []):
+    def runner():
+        _thread_locals.event_callback = sync_callback
+        try:
+            return run_orchestrator_sync(repo_url, user_idea, diff, workflow_mode)
+        finally:
+            # Signal completion
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+    # Run orchestrator in a thread
+    future = loop.run_in_executor(None, runner)
+
+    # Yield events as they arrive
+    while True:
+        event = await q.get()
+        if event is None:
+            break
         yield json.dumps(event)
+
+    final_state = await future
 
     # Final done signal
     yield json.dumps({"type": "stream_end", "final_state": {

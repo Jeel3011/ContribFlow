@@ -18,12 +18,12 @@ class Finding(BaseModel):
     evidence_files: list[str] = Field(description="List of files providing evidence")
     
 class Stage3LLMResponse(BaseModel):
-    files_affected: list[str] = Field(description="List of all affected file paths")
-    services_at_risk: list[str] = Field(description="List of services/components at risk")
-    tests_to_update: list[str] = Field(description="List of test files that need updating")
-    findings: list[Finding] = Field(description="List of impact findings")
-    suggested_order: list[str] = Field(description="Suggested order of work")
-    dependency_traces: dict[str, str] = Field(description="A map of file paths to a 1-sentence explanation of why it is affected (e.g., 'X is affected because it imports Y')")
+    files_affected: list[str] = Field(default_factory=list, description="List of all affected file paths")
+    services_at_risk: list[str] = Field(default_factory=list, description="List of services/components at risk")
+    tests_to_update: list[str] = Field(default_factory=list, description="List of test files that need updating")
+    findings: list[Finding] = Field(default_factory=list, description="List of impact findings")
+    suggested_order: list[str] = Field(default_factory=list, description="Suggested order of work")
+    dependency_traces: dict[str, str] = Field(default_factory=dict, description="A map of file paths to a 1-sentence explanation of why it is affected (e.g., 'X is affected because it imports Y')")
 
 from stage3.github_search import GitHubSearchClient, extract_keywords_from_description
 from stage3.github_api import get_tree, get_file_content
@@ -127,7 +127,7 @@ Do NOT include generic terms like "config", "node", "service".
         state["search_keywords"] = [words[0]] if words else ["main"]
 
     state["iteration"] = 0
-    state["max_iterations"] = 2
+    state["max_iterations"] = 1
     
     return state
 
@@ -265,7 +265,7 @@ def impact_analysis_node(state: EnhancedAgentState) -> EnhancedAgentState:
             context["file_samples"][file_path] = "\n".join(lines)
     
     # LLM analysis with structured output
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Stage3LLMResponse)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Stage3LLMResponse, method="function_calling")
     
     prompt = f"""Analyze the impact of this code change and determine the blast radius.
 
@@ -508,7 +508,7 @@ def run_enhanced_pipeline(
     Returns:
         Stage 3 JSON output with impact analysis
     """
-    owner_repo = repo_url.replace("https://github.com/", "").strip("/")
+    owner_repo = repo_url.split("github.com/")[-1].strip("/")
     
     initial_state = {
         "repo_url": repo_url,
