@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from stage3.pipeline import run_stage3
+from stage3.enhanced_pipeline import run_enhanced_pipeline
 
 router = APIRouter()
 
@@ -13,7 +13,7 @@ class Stage3Request(BaseModel):
 @router.post("/stage3/impact")
 async def analyze_impact(req: Stage3Request):
     try:
-        result = run_stage3(req.repo_url, req.change_description, req.diff)
+        result = run_enhanced_pipeline(req.repo_url, req.change_description, req.diff)
         return result
     except Exception as e:
         if "rate limit" in str(e).lower():

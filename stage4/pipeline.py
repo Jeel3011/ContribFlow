@@ -105,9 +105,18 @@ def run_stage4(repo_url: str, diff: str, bob_response: Optional[str] = None) -> 
     context_summary = build_context_summary(parsed_diff, convention_context, static_issues)
     print(f"[Stage 4] Context: {context_summary}")
     
-    # Step 5: Parse Bob response if provided
+    # Step 5: Parse Agent response (automated)
+    if not bob_response:
+        print("[Stage 4] Invoking AI Agent for code review...")
+        try:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+            bob_response = llm.invoke(prompt).content
+        except Exception as e:
+            print(f"[Stage 4] Warning: LLM call failed: {e}")
+
     if bob_response:
-        print("[Stage 4] Parsing Bob response...")
+        print("[Stage 4] Parsing Agent response...")
         result = parse_stage4_response(bob_response, owner_repo, static_issues)
         
         print(f"[Stage 4] Final result: {result['summary']}")

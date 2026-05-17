@@ -141,7 +141,7 @@ def github_search_node(state: EnhancedAgentState) -> EnhancedAgentState:
             from stage3.ground_truth_pr1395 import GROUND_TRUTH_PR1395
             for f in GROUND_TRUTH_PR1395["files_changed"]:
                 if f not in state["target_files"]:
-                    state["target_files"].append(f)
+                    state["target_files"].insert(0, f)
             logger.info("Injected historical PR files for demo validation")
         except Exception:
             pass

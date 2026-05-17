@@ -111,10 +111,19 @@ def run_stage1(repo_url: str, bob_response: Optional[str] = None) -> dict:
         context=context
     )
     
-    # Step 6: Parse Bob response if provided
+    # Step 6: Parse Agent response (automated)
     gaps = []
+    if not bob_response:
+        print("[Stage 1] Invoking AI Agent to analyze gaps...")
+        try:
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+            bob_response = llm.invoke(prompt).content
+        except Exception as e:
+            print(f"[Stage 1] Warning: LLM call failed: {e}")
+
     if bob_response:
-        print("[Stage 1] Parsing Bob response...")
+        print("[Stage 1] Parsing Agent response...")
         parsed = parse_stage1_response(bob_response, owner_repo)
         gaps = parsed.get("gaps", [])
         print(f"[Stage 1] Identified {len(gaps)} gaps")
