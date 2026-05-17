@@ -8,6 +8,29 @@ from stage2.semantic_matcher import get_top_matches
 from stage2.prompt_builder import build_stage2_prompt, assemble_stage2_context
 
 
+def _build_recommendation(status: str, conflicts: list, idea: str) -> tuple[str, str]:
+    """Build recommendation code and human-readable text per IO Design spec"""
+    if status == "conflict":
+        first = conflicts[0] if conflicts else {}
+        num = first.get("number", "")
+        type_ = first.get("type", "issue")
+        return (
+            "conflict_found",
+            f"This idea is already being worked on. Consider commenting on {type_.upper()} #{num} "
+            f"to collaborate rather than opening a duplicate."
+        )
+    elif status == "complementary":
+        return (
+            "partial_overlap",
+            "Related work exists but your idea adds distinct value. Consider referencing existing work in your PR description."
+        )
+    else:
+        return (
+            "proceed",
+            "Safe to proceed. No existing issues or PRs cover this idea. You're clear to open a new issue or PR."
+        )
+
+
 def run_stage2(repo_url: str, idea: str) -> dict:
     """
     Run Stage 2 idea deduplication pipeline with direct conflict analysis
@@ -90,20 +113,34 @@ def run_stage2(repo_url: str, idea: str) -> dict:
                 "number": match["number"],
                 "url": match["url"],
                 "title": match["title"],
+                "state": state,
+                "assigned": bool(match.get("assignee")),
+                "assignee": match.get("assignee", None),
                 "similarity": round(similarity, 2),
-                "summary": summary
+                "summary": summary,
+                "recommendation": "comment" if state == "open" else "reference"
             })
-    
-    # Set status based on findings (conflict takes precedence over complementary)
+
+    # Set status based on findings
     if status != "conflict" and has_complementary:
         status = "complementary"
-    
-    # Return structured response matching expected format
+
+    recommendation, recommendation_text = _build_recommendation(status, conflicts, idea)
+
+    # Return structured response — fully compliant with ContribFlow_IO_Design.md
     return {
         "repo": owner_repo,
         "idea": idea,
         "status": status,
+        "checked_against": {
+            "open_issues": sum(1 for i in issues if i.get("state") == "open"),
+            "closed_issues": sum(1 for i in issues if i.get("state") == "closed"),
+            "open_prs": sum(1 for p in prs if p.get("state") == "open"),
+            "closed_prs": sum(1 for p in prs if p.get("state") == "closed"),
+        },
         "conflicts": conflicts,
+        "recommendation": recommendation,
+        "recommendation_text": recommendation_text,
         "prompt_for_bob": prompt
     }
 

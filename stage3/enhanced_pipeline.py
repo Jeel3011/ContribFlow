@@ -300,11 +300,34 @@ Rules:
             content = content.split("```")[1].split("```")[0].strip()
         
         output = json.loads(content)
-        
-        # Add repo info
+
+        # Add repo info and spec-required fields
         output["repo"] = state["owner_repo"]
         output["change_description"] = state["change_description"]
-        
+        output["analysis_mode"] = "description_and_diff" if state.get("diff") else "description_only"
+        output["target_files_identified"] = state["target_files"][:10]
+
+        # Add IDs to findings
+        for i, finding in enumerate(output.get("findings", []), 1):
+            if "id" not in finding:
+                finding["id"] = f"f{i:03d}"
+
+        # Build risk_summary
+        findings = output.get("findings", [])
+        output["risk_summary"] = {
+            "high_confidence_findings": sum(1 for f in findings if f.get("confidence", 0) >= 0.7),
+            "low_confidence_findings": sum(1 for f in findings if f.get("confidence", 0) < 0.5),
+            "total_files_affected": len(output.get("files_affected", [])),
+            "services_at_risk_count": len(output.get("services_at_risk", [])),
+            "has_dynamic_risks": any(f.get("type") == "dynamic" for f in findings)
+        }
+        output["confidence_explanation"] = (
+            "Confidence reflects how certain the analysis is that a finding is correct — not code quality. "
+            "Direct function calls or imports score 0.85–0.95. "
+            "Indirect 2-hop dependencies score 0.4–0.7. "
+            "Dynamic imports (importlib, getattr) score 0.2–0.4 because static analysis cannot fully verify them."
+        )
+
         state["final_output"] = output
         
         logger.info(f"Analysis complete: {len(output.get('files_affected', []))} files affected")

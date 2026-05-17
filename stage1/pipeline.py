@@ -3,6 +3,8 @@ Pipeline orchestrator for Stage 1 (Gap Finder)
 Coordinates GitHub API fetching, data trimming, suspiciousness scoring, and prompt building
 """
 
+import re
+from datetime import datetime, timezone
 from typing import Optional
 
 from stage1.github_api import get_tree, get_commits, get_issues, get_file_content
@@ -13,6 +15,46 @@ from stage1.data_trimmer import (
 from stage1.suspiciousness_scorer import score_and_rank_files
 from stage1.prompt_builder import build_stage1_prompt, build_context_for_prompt
 from stage1.response_parser import parse_stage1_response
+
+
+def _detect_language(source_files: list) -> str:
+    """Detect primary language from file extensions"""
+    ext_counts = {}
+    for f in source_files:
+        path = f.get("path", "")
+        if path.endswith(".py"): ext_counts["Python"] = ext_counts.get("Python", 0) + 1
+        elif path.endswith((".ts", ".tsx")): ext_counts["TypeScript"] = ext_counts.get("TypeScript", 0) + 1
+        elif path.endswith((".js", ".jsx")): ext_counts["JavaScript"] = ext_counts.get("JavaScript", 0) + 1
+        elif path.endswith(".go"): ext_counts["Go"] = ext_counts.get("Go", 0) + 1
+        elif path.endswith(".rs"): ext_counts["Rust"] = ext_counts.get("Rust", 0) + 1
+    return max(ext_counts, key=ext_counts.get) if ext_counts else "Unknown"
+
+
+def _enrich_gaps(gaps: list) -> list:
+    """Add spec-required fields to each gap: id, evidence, line_range, estimated_effort, good_first_issue"""
+    enriched = []
+    for i, gap in enumerate(gaps, 1):
+        # Generate ID
+        gap["id"] = f"gap_{i:03d}"
+        # Evidence: use reasoning if evidence field not returned by LLM
+        if not gap.get("evidence"):
+            gap["evidence"] = gap.get("reasoning", "")[:200]
+        # line_range: try to parse from reasoning or default
+        if not gap.get("line_range"):
+            match = re.search(r'line[s]?\s*(\d+)[-–](\d+)', gap.get("reasoning", ""), re.IGNORECASE)
+            gap["line_range"] = f"{match.group(1)}-{match.group(2)}" if match else "unknown"
+        # estimated_effort: infer from impact
+        if not gap.get("estimated_effort"):
+            effort_map = {"high": "high", "medium": "medium", "low": "low"}
+            gap["estimated_effort"] = effort_map.get(gap.get("impact", "medium"), "medium")
+        # good_first_issue: low effort + not high impact
+        if "good_first_issue" not in gap:
+            gap["good_first_issue"] = (
+                gap.get("estimated_effort") == "low" and
+                gap.get("impact") != "high"
+            )
+        enriched.append(gap)
+    return enriched
 
 
 def run_stage1(repo_url: str, bob_response: Optional[str] = None) -> dict:
@@ -128,6 +170,21 @@ def run_stage1(repo_url: str, bob_response: Optional[str] = None) -> dict:
         gaps = parsed.get("gaps", [])
         print(f"[Stage 1] Identified {len(gaps)} gaps")
     
+    # Enrich gaps with spec-required fields
+    gaps = _enrich_gaps(gaps)
+
+    # Build summary counts
+    summary = {
+        "high_count": sum(1 for g in gaps if g.get("impact") == "high"),
+        "medium_count": sum(1 for g in gaps if g.get("impact") == "medium"),
+        "low_count": sum(1 for g in gaps if g.get("impact") == "low"),
+        "top_category": max(
+            set(g.get("category", "unknown") for g in gaps),
+            key=lambda c: sum(1 for g in gaps if g.get("category") == c),
+            default="unknown"
+        ) if gaps else "unknown"
+    }
+
     # Build metadata
     metadata = {
         "total_files": len(source_files),
@@ -136,11 +193,15 @@ def run_stage1(repo_url: str, bob_response: Optional[str] = None) -> dict:
         "commits_analyzed": len(trimmed_commits),
         "issues_analyzed": len(trimmed_issues)
     }
-    
-    # Return result
+
+    # Return result — fully compliant with ContribFlow_IO_Design.md
     result = {
         "repo": owner_repo,
+        "analysis_timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "language_detected": _detect_language(source_files),
+        "files_analyzed": len(file_contents),
         "gaps": gaps,
+        "summary": summary,
         "prompt_for_bob": prompt,
         "metadata": metadata
     }

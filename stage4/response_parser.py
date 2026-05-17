@@ -57,26 +57,42 @@ def parse_stage4_response(raw_response: str, repo: str, static_issues: List[Dict
         try:
             data = json.loads(json_str)
             bob_issues = data.get("issues", [])
-            
-            # Add source attribution
+
+            # Add source + category attribution
             for issue in bob_issues:
-                issue["source"] = "bob"
-            
+                issue["source"] = issue.get("source", "bob")
+                if not issue.get("category"):
+                    # Infer category from issue text
+                    text = issue.get("issue", "").lower()
+                    if "convention" in text or "annotation" in text or "docstring" in text:
+                        issue["category"] = "convention-violation"
+                    elif "pattern" in text or "inconsistent" in text:
+                        issue["category"] = "pattern-inconsistency"
+                    elif "test" in text:
+                        issue["category"] = "missing-test"
+                    elif "unused" in text or "import" in text:
+                        issue["category"] = "cleanup"
+                    else:
+                        issue["category"] = "logic-bug"
+
         except json.JSONDecodeError as e:
             print(f"[Stage 4] Warning: Failed to parse Bob response JSON: {e}")
-    
+
     # Merge static and Bob issues
     all_issues = merge_static_and_ai_issues(static_issues, bob_issues)
-    
-    # Sort by severity
     all_issues = sort_issues_by_severity(all_issues)
-    
-    # Generate summary
+
+    # Add IDs and ensure category on static issues
+    for i, issue in enumerate(all_issues, 1):
+        if "id" not in issue:
+            issue["id"] = f"i{i:03d}"
+        if not issue.get("category"):
+            issue["category"] = "cleanup"
+
+    # Generate summary and pass/fail
     summary = generate_summary(all_issues)
-    
-    # Determine if checks pass
     passes_check = not any(issue["severity"] == "error" for issue in all_issues)
-    
+
     return {
         "repo": repo,
         "passes_check": passes_check,

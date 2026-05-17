@@ -118,11 +118,23 @@ def run_stage4(repo_url: str, diff: str, bob_response: Optional[str] = None) -> 
     if bob_response:
         print("[Stage 4] Parsing Agent response...")
         result = parse_stage4_response(bob_response, owner_repo, static_issues)
-        
+
         print(f"[Stage 4] Final result: {result['summary']}")
         print(f"[Stage 4] Passes check: {result['passes_check']}")
-        
-        # Add prompt and metadata
+
+        # Extract convention file paths for spec compliance
+        convention_files_used = [
+            sample["path"]
+            for samples in convention_context.get("conventions", {}).values()
+            for sample in samples
+        ]
+
+        # Build convention_notes from summaries
+        summaries = convention_context.get("summaries", {})
+        convention_notes = list(set(summaries.values()))[:3] if summaries else []
+
+        result["convention_files_used"] = convention_files_used
+        result["convention_notes"] = convention_notes
         result["prompt_for_bob"] = prompt
         result["metadata"] = {
             "files_changed": len(changed_files),
@@ -133,7 +145,7 @@ def run_stage4(repo_url: str, diff: str, bob_response: Optional[str] = None) -> 
             "static_warnings": static_by_severity["warning"],
             "static_info": static_by_severity["info"]
         }
-        
+
         return result
     
     else:
