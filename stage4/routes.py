@@ -3,11 +3,12 @@ FastAPI routes for Stage 4 (Pre-PR Quality Check)
 Handles HTTP endpoints for code review before PR submission
 """
 
+import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
-from stage4.pipeline import run_stage4
-
+from shared.executor import get_executor
+from shared.errors import handle_pipeline_error
 
 router = APIRouter()
 
@@ -22,48 +23,28 @@ class Stage4Request(BaseModel):
 @router.post("/stage4/review")
 async def review_changes(req: Stage4Request):
     """
-    Perform pre-PR quality check on git diff
-    
-    Args:
-        req: Stage4Request containing repo_url, diff, and optional bob_response
-        
-    Returns:
-        JSON response with:
-        - repo: Repository identifier
-        - passes_check: Boolean indicating if checks pass (None if no bob_response)
-        - summary: Summary of issues found
-        - issues: List of issues with severity, file, line, description, and fix
-        - prompt_for_bob: Prompt to copy to Bob IDE
-        - metadata: Pipeline execution metadata
-        
-    Raises:
-        HTTPException: 400 for invalid input, 429 for rate limits, 500 for other errors
+    Perform pre-PR quality check on git diff.
+
+    Returns issues by severity with a pass/fail result.
     """
-    # Validate input
     if not req.diff or not req.diff.strip():
         raise HTTPException(400, "Diff cannot be empty")
-    
+
     if not req.repo_url or not req.repo_url.strip():
         raise HTTPException(400, "Repository URL cannot be empty")
-    
-    # Validate repo URL format
+
     if "github.com" not in req.repo_url:
         raise HTTPException(400, "Invalid GitHub repository URL")
-    
+
     try:
-        result = run_stage4(req.repo_url, req.diff, req.bob_response)
+        from stage4.pipeline import run_stage4
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            get_executor(),
+            lambda: run_stage4(req.repo_url, req.diff, req.bob_response)
+        )
         return result
     except Exception as e:
-        error_msg = str(e).lower()
-        
-        if "rate limit" in error_msg:
-            raise HTTPException(429, "GitHub rate limit hit. Try again later.")
-        
-        if "not found" in error_msg or "404" in error_msg:
-            raise HTTPException(404, "Repository not found or not accessible")
-        
-        # Generic error
-        raise HTTPException(500, f"Pipeline error: {str(e)}")
-
+        raise handle_pipeline_error(e, "stage4")
 
 # Made with Bob

@@ -137,9 +137,11 @@ Provide a summary explaining why.
                     # We'll just set the flag to upgrade status to complementary if no conflicts.
         except Exception as e:
             logger.error(f"LLM verification failed: {e}")
-            # Fallback to simple threshold if LLM fails
+            # Fallback to threshold if LLM fails.
+            # 0.85 is high enough to avoid false positives with all-MiniLM-L6-v2.
+            CONFLICT_THRESHOLD_FALLBACK = 0.85
             for match in top_matches:
-                if match["similarity"] >= 0.7:
+                if match["similarity"] >= CONFLICT_THRESHOLD_FALLBACK:
                     status = "conflict"
                     conflicts.append({
                         "type": match["type"],
@@ -150,8 +152,9 @@ Provide a summary explaining why.
                         "assigned": bool(match.get("assignee")),
                         "assignee": match.get("assignee", None),
                         "similarity": round(match["similarity"], 2),
-                        "summary": "Likely conflict based on semantic similarity.",
-                        "recommendation": "comment"
+                        "summary": "Likely conflict based on semantic similarity (LLM unavailable — heuristic only).",
+                        "recommendation": "comment",
+                        "llm_verified": False
                     })
 
     # Set status based on findings

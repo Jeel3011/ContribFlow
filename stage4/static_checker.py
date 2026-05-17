@@ -3,9 +3,10 @@ Static Code Checker for Stage 4 (Pre-PR Quality Check)
 Runs deterministic checks BEFORE Bob to save tokens
 """
 
+import asyncio
 import re
 import json
-import subprocess
+import os
 import tempfile
 import logging
 from typing import List, Dict
@@ -13,52 +14,66 @@ from typing import List, Dict
 logger = logging.getLogger(__name__)
 
 
-def run_static_checks(parsed_diff: Dict) -> List[Dict]:
+def safe_line_number(line_str) -> int:
+    """Extract integer from various line formats like '42', '42-50', '~45', 'L42'."""
+    try:
+        return int(str(line_str).split("-")[0].strip().lstrip("~").lstrip("L"))
+    except (ValueError, AttributeError):
+        return 0
+
+
+def run_static_checks(parsed_diff: Dict, include_info: bool = False) -> List[Dict]:
     """
-    Run all static checks on parsed diff
-    
+    Run all static checks on parsed diff.
+
     Args:
         parsed_diff: Output from diff_parser.parse_diff()
-        
+        include_info: If True, always include info-level issues. If False (default),
+                      info-level issues are only returned when no errors/warnings exist.
+
     Returns:
-        List of issues found:
-        [
-            {
-                "severity": "error" | "warning" | "info",
-                "file": "src/app.py",
-                "line": "42",
-                "issue": "Description of issue",
-                "fix": "Suggested fix",
-                "source": "static"
-            }
-        ]
+        List of issues sorted by severity (error > warning > info)
     """
     issues = []
-    
+
     for file in parsed_diff["files"]:
         file_path = file["path"]
         language = file["language"]
         additions = file["additions"]
-        
-        # Skip non-source files
+
         if language == "unknown":
             continue
-        
-        # Combine additions into full text for analysis
+
         added_code = "\n".join(additions)
-        
-        # Run language-specific checks
+
         if language == "python":
-            issues.extend(check_python_code(added_code, file_path))
-            issues.extend(run_ruff_check(added_code, file_path))
+            # Always run error/warning checks
+            issues.extend(check_bare_except(added_code, file_path))
+            issues.extend(check_print_statements(added_code, file_path))
+            issues.extend(run_ruff_check_sync(added_code, file_path))
+            if include_info:
+                issues.extend(check_missing_type_annotations(added_code, file_path))
+                issues.extend(check_missing_docstrings(added_code, file_path))
+                issues.extend(check_long_functions(added_code, file_path))
+                issues.extend(check_unused_imports(added_code, file_path))
         elif language in ["javascript", "typescript"]:
             issues.extend(check_javascript_code(added_code, file_path))
-        
-        # Run universal checks (all languages)
+
+        # Universal checks
         issues.extend(check_long_lines(added_code, file_path))
         issues.extend(check_trailing_whitespace(additions, file_path))
         issues.extend(check_todo_comments(added_code, file_path))
-    
+
+    # If no errors/warnings, show info-level issues so something is always useful
+    has_real_issues = any(i.get("severity") in ("error", "warning") for i in issues)
+    if not has_real_issues and not include_info:
+        # Re-run with info enabled so the result isn't empty
+        return run_static_checks(parsed_diff, include_info=True)
+
+    # Filter out info if real issues exist (avoid noise burying errors)
+    if has_real_issues and not include_info:
+        issues = [i for i in issues if i.get("severity") != "info"]
+
     return issues
 
 
@@ -96,38 +111,104 @@ def check_python_code(code: str, file_path: str) -> List[Dict]:
     
     return issues
 
-def run_ruff_check(code: str, file_path: str) -> List[Dict]:
-    """Run ruff on changed files for real deterministic linting results"""
+async def run_ruff_check_async(code: str, file_path: str) -> List[Dict]:
+    """Run ruff asynchronously using asyncio subprocess (non-blocking)."""
     issues = []
+    tmp_path = None
     try:
         with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
             f.write(code)
-            f.flush()
-            
-            result = subprocess.run(
-                ["ruff", "check", f.name, "--output-format=json", "--select=E,W,F,I"],
-                capture_output=True, text=True, timeout=10
-            )
-            
-            import os
-            os.unlink(f.name)
-            
-        if result.stdout:
-            ruff_issues = json.loads(result.stdout)
-            for issue in ruff_issues:
-                issues.append({
-                    "severity": "error" if issue.get("code", "").startswith("E") else "warning",
-                    "file": file_path,
-                    "line": str(issue.get("location", {}).get("row", 1)),
-                    "issue": f"[ruff {issue.get('code')}] {issue.get('message')}",
-                    "fix": issue.get("fix", {}).get("message", "See ruff documentation") if issue.get("fix") else "N/A",
-                    "source": "static",
-                    "category": "convention-violation"
-                })
+            tmp_path = f.name
+
+        proc = await asyncio.create_subprocess_exec(
+            "ruff", "check", tmp_path,
+            "--output-format=json",
+            "--select=E,W,F,I",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        except asyncio.TimeoutError:
+            proc.kill()
+            logger.warning(f"Ruff timed out for {file_path}")
+            return issues
+
+        if stdout:
+            try:
+                ruff_issues = json.loads(stdout.decode())
+                for issue in ruff_issues:
+                    issues.append({
+                        "severity": "error" if issue.get("code", "").startswith("E") else "warning",
+                        "file": file_path,
+                        "line": str(issue.get("location", {}).get("row", 1)),
+                        "issue": f"[ruff {issue.get('code')}] {issue.get('message')}",
+                        "fix": issue.get("fix", {}).get("message", "See ruff documentation") if issue.get("fix") else "N/A",
+                        "source": "static",
+                        "category": "convention-violation"
+                    })
+            except json.JSONDecodeError:
+                pass
+    except FileNotFoundError:
+        logger.debug("ruff not found in PATH — skipping ruff check")
     except Exception as e:
         logger.warning(f"Ruff check failed for {file_path}: {e}")
-        
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
     return issues
+
+
+def run_ruff_check_sync(code: str, file_path: str) -> List[Dict]:
+    """Synchronous ruff wrapper that works inside run_in_executor thread context."""
+    import subprocess
+    issues = []
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write(code)
+            tmp_path = f.name
+
+        result = subprocess.run(
+            ["ruff", "check", tmp_path, "--output-format=json", "--select=E,W,F,I"],
+            capture_output=True, text=True, timeout=10
+        )
+
+        if result.stdout:
+            try:
+                ruff_issues = json.loads(result.stdout)
+                for issue in ruff_issues:
+                    issues.append({
+                        "severity": "error" if issue.get("code", "").startswith("E") else "warning",
+                        "file": file_path,
+                        "line": str(issue.get("location", {}).get("row", 1)),
+                        "issue": f"[ruff {issue.get('code')}] {issue.get('message')}",
+                        "fix": issue.get("fix", {}).get("message", "See ruff documentation") if issue.get("fix") else "N/A",
+                        "source": "static",
+                        "category": "convention-violation"
+                    })
+            except json.JSONDecodeError:
+                pass
+    except FileNotFoundError:
+        logger.debug("ruff not found in PATH — skipping ruff check")
+    except Exception as e:
+        logger.warning(f"Ruff check (sync) failed for {file_path}: {e}")
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+    return issues
+
+
+# Legacy alias kept for any direct callers
+run_ruff_check = run_ruff_check_sync
 
 
 def check_javascript_code(code: str, file_path: str) -> List[Dict]:
@@ -386,9 +467,8 @@ def check_loose_equality(code: str, file_path: str) -> List[Dict]:
     """Check for == instead of === in JavaScript"""
     issues = []
     lines = code.split("\n")
-    
+
     for i, line in enumerate(lines, 1):
-        # Match == but not === or ==
         if re.search(r'[^=!<>]==[^=]', line) and not line.strip().startswith("//"):
             issues.append({
                 "severity": "warning",
@@ -398,7 +478,7 @@ def check_loose_equality(code: str, file_path: str) -> List[Dict]:
                 "fix": "Use '===' for strict equality comparison",
                 "source": "static"
             })
-    
+
     return issues
 
 

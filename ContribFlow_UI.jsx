@@ -255,14 +255,23 @@ function StageCard({ stageKey, stageName, status, summary, data, defaultOpen = f
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8, textTransform: "uppercase" }}>Files Affected & Dependency Traces</div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {(data.files_affected || []).length === 0 ? <span style={{fontSize: 12, color: T.dim}}>None</span> : 
-                    data.files_affected.map((f, i) => (
-                      <div key={i} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 6, padding: "10px 14px" }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 8, textTransform: "uppercase" }}>
+                  Files Affected & Dependency Traces
+                  <span style={{ marginLeft: 8, color: T.dim, fontWeight: 400, textTransform: "none" }}>
+                    ({(data.files_affected || []).length} files)
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6,
+                  maxHeight: 320, overflowY: "auto", paddingRight: 4 }}>
+                  {(data.files_affected || []).length === 0
+                    ? <span style={{fontSize: 12, color: T.dim}}>None</span>
+                    : data.files_affected.map((f, i) => (
+                      <div key={i} style={{ background: T.surface, border: `1px solid ${T.border}`,
+                        borderRadius: 6, padding: "10px 14px", flexShrink: 0 }}>
                         <div style={{ fontSize: 12, fontFamily: T.mono, color: T.text, fontWeight: 500 }}>{f}</div>
                         {data.dependency_traces?.[f] && (
-                          <div style={{ fontSize: 11, color: T.muted, marginTop: 4, paddingLeft: 12, borderLeft: `2px solid ${T.blue}` }}>
+                          <div style={{ fontSize: 11, color: T.muted, marginTop: 4,
+                            paddingLeft: 12, borderLeft: `2px solid ${T.blue}` }}>
                             {data.dependency_traces[f]}
                           </div>
                         )}
@@ -277,17 +286,28 @@ function StageCard({ stageKey, stageName, status, summary, data, defaultOpen = f
           {stageName === "Pre-PR Quality Check" && (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {(data.issues || []).map((issue, i) => (
-                <div key={i} style={{ padding: 12, background: T.bg, borderRadius: 8, borderLeft: `3px solid ${issue.severity === "error" ? T.red : T.amber}` }}>
+                <div key={i} style={{ padding: 12, background: T.bg, borderRadius: 8,
+                  borderLeft: `3px solid ${issue.severity === "error" ? T.red : issue.severity === "warning" ? T.amber : T.blue}` }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                    <span style={{ fontWeight: 600, fontSize: 13, color: T.text }}>{issue.type}</span>
-                    <span style={{ fontSize: 10, padding: "2px 6px", background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10 }}>{issue.category}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, color: T.blue }}>{issue.file}:{issue.line}</span>
+                    <span style={{ fontSize: 10, padding: "2px 6px", background: T.surface,
+                      border: `1px solid ${T.border}`, borderRadius: 10, color: T.muted }}>{issue.severity}</span>
+                    {issue.source === "static" && <span style={{ fontSize: 10, color: T.dim }}>static</span>}
                   </div>
-                  <div style={{ fontSize: 11, color: T.muted, fontFamily: T.mono, marginBottom: 4 }}>{issue.file}:{issue.line}</div>
-                  <div style={{ fontSize: 12, color: T.dim }}>{issue.description}</div>
+                  <div style={{ fontSize: 13, color: T.text, marginBottom: 4 }}>{issue.issue}</div>
+                  {issue.fix && issue.fix !== "N/A" && (
+                    <div style={{ fontSize: 11, color: T.green, fontFamily: T.mono,
+                      background: "rgba(16,185,129,0.08)", padding: "6px 10px", borderRadius: 6,
+                      borderLeft: `2px solid ${T.green}` }}>
+                      fix: {issue.fix}
+                    </div>
+                  )}
                 </div>
               ))}
               {(data.issues || []).length === 0 && (
-                <div style={{ fontSize: 13, color: T.green, padding: 12, background: "rgba(16, 185, 129, 0.1)", borderRadius: 8, border: `1px solid rgba(16, 185, 129, 0.3)` }}>
+                <div style={{ fontSize: 13, color: T.green, padding: 12,
+                  background: "rgba(16, 185, 129, 0.1)", borderRadius: 8,
+                  border: `1px solid rgba(16, 185, 129, 0.3)` }}>
                   ✅ No issues found. Code is clean!
                 </div>
               )}
@@ -344,9 +364,10 @@ function ScoreCard({ summary }) {
 }
 
 // ─── Master Orchestrator UI ────────────────────────────────────────────────────
-function Orchestrator({ repoUrl, workflowMode }) {
+function Orchestrator({ repoUrl }) {
   const [idea, setIdea] = useState("");
   const [diff, setDiff] = useState("");
+  const [workflowMode, setWorkflowMode] = useState("full");
   const [stages, setStages] = useState({
     stage1: { status: "pending", stageName: "Gap Finder",            summary: "Find where to contribute" },
     stage2: { status: "pending", stageName: "Idea Deduplication",   summary: "Check if already proposed" },
@@ -461,6 +482,26 @@ function Orchestrator({ repoUrl, workflowMode }) {
 
   return (
     <div className="fade-in">
+      {/* Workflow mode toggle (moved from header to avoid navigation conflict) */}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 20 }}>
+        <span style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, fontWeight: 600,
+          textTransform: "uppercase", letterSpacing: "0.05em" }}>Mode:</span>
+        <div style={{ display: "flex", background: "rgba(255,255,255,0.06)", borderRadius: 8,
+          padding: 4, border: `1px solid ${T.border}` }}>
+          {[{id:"full",label:"Full Workflow"},{id:"impact_only",label:"Impact Only"}].map(m => (
+            <button key={m.id} onClick={() => setWorkflowMode(m.id)}
+              style={{
+                background: workflowMode === m.id ? T.surface : "transparent",
+                color: workflowMode === m.id ? (m.id === "impact_only" ? T.cyan : T.text) : T.muted,
+                border: "none", padding: "7px 16px", borderRadius: 6,
+                fontSize: 13, fontWeight: 600, fontFamily: T.sans, cursor: "pointer",
+                boxShadow: workflowMode === m.id ? "0 1px 3px rgba(0,0,0,0.15)" : "none",
+                transition: "all 0.2s"
+              }}>{m.label}</button>
+          ))}
+        </div>
+      </div>
+
       {/* Unified input area */}
       <div style={{ background: T.surface, border: `1px solid ${T.border}`,
         borderRadius: 16, padding: "28px 32px", marginBottom: 28,
@@ -1197,23 +1238,13 @@ function ContribFlow() {
   const [repoUrl, setRepoUrl] = useState("");
   const [activeTab, setActiveTab] = useState("orchestrator");
   const [repoValid, setRepoValid] = useState(null);
-  const [workflowMode, setWorkflowMode] = useState("full");
 
   const validateUrl = useCallback((val) => {
     const match = val.match(/github\.com\/([^/]+)\/([^/\s?#]+)/);
     setRepoValid(val === "" ? null : !!match);
   }, []);
 
-  // Filter tabs based on workflow mode
-  const visibleTabs = workflowMode === "impact_only" 
-    ? [TABS.find(t => t.id === "impact")] 
-    : TABS;
-
-  useEffect(() => {
-    if (workflowMode === "impact_only" && activeTab !== "impact") {
-      setActiveTab("impact");
-    }
-  }, [workflowMode, activeTab]);
+  const visibleTabs = TABS;
 
   return (
     <div style={{
@@ -1350,33 +1381,13 @@ function ContribFlow() {
           )}
         </div>
         
-        {/* Workflow Toggle */}
-        <div style={{ display: "flex", background: T.border, borderRadius: 8, padding: 4, flexShrink: 0 }}>
-          <button 
-            onClick={() => setWorkflowMode("full")}
-            style={{
-              background: workflowMode === "full" ? T.surface : "transparent",
-              color: workflowMode === "full" ? T.text : T.muted,
-              border: "none", padding: "8px 16px", borderRadius: 6,
-              fontSize: 13, fontWeight: 600, fontFamily: T.sans, cursor: "pointer",
-              boxShadow: workflowMode === "full" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-              transition: "all 0.2s"
-            }}>
-            Full Workflow
-          </button>
-          <button 
-            onClick={() => setWorkflowMode("impact_only")}
-            style={{
-              background: workflowMode === "impact_only" ? T.surface : "transparent",
-              color: workflowMode === "impact_only" ? T.blue : T.muted,
-              border: "none", padding: "8px 16px", borderRadius: 6,
-              fontSize: 13, fontWeight: 600, fontFamily: T.sans, cursor: "pointer",
-              boxShadow: workflowMode === "impact_only" ? "0 1px 3px rgba(0,0,0,0.1)" : "none",
-              transition: "all 0.2s"
-            }}>
-            Impact Analyzer Only
-          </button>
-        </div>
+        {/* Health badge */}
+        <a href="http://localhost:8000/health" target="_blank" rel="noreferrer"
+          style={{ fontSize: 11, color: T.dim, fontFamily: T.mono, textDecoration: "none",
+            padding: "6px 12px", border: `1px solid ${T.border}`, borderRadius: 6,
+            flexShrink: 0, transition: "color 0.2s" }}>
+          /health
+        </a>
       </div>
 
       {/* Tab bar */}
@@ -1435,7 +1446,7 @@ function ContribFlow() {
           </div>
         )}
 
-        {activeTab === "orchestrator" && <Orchestrator repoUrl={repoUrl} workflowMode={workflowMode} />}
+        {activeTab === "orchestrator" && <Orchestrator repoUrl={repoUrl} />}
         {activeTab === "gap"          && <GapFinder repoUrl={repoUrl} />}
         {activeTab === "dedup"        && <IdeaDedup repoUrl={repoUrl} />}
         {activeTab === "impact"       && <ChangeImpact repoUrl={repoUrl} />}

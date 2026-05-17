@@ -103,35 +103,33 @@ def parse_stage4_response(raw_response: str, repo: str, static_issues: List[Dict
 
 def merge_static_and_ai_issues(static_issues: List[Dict], ai_issues: List[Dict]) -> List[Dict]:
     """
-    Merge static and AI issues, removing duplicates
-    
+    Merge static and AI issues, removing duplicates.
+
     Args:
         static_issues: Issues from static analysis
         ai_issues: Issues from Bob
-        
+
     Returns:
         Merged list of issues
     """
-    # Start with all static issues
+    from stage4.static_checker import safe_line_number
+
     merged = list(static_issues)
-    
-    # Add AI issues that don't duplicate static issues
+
     for ai_issue in ai_issues:
-        # Check if this issue is similar to any static issue
         is_duplicate = False
-        
+
         for static_issue in static_issues:
-            # Same file and similar line number
             if (ai_issue.get("file") == static_issue.get("file") and
-                abs(int(ai_issue.get("line", "0")) - int(static_issue.get("line", "0"))) <= 2):
-                # Similar issue description
+                    abs(safe_line_number(ai_issue.get("line", "0")) -
+                        safe_line_number(static_issue.get("line", "0"))) <= 2):
                 if similar_text(ai_issue.get("issue", ""), static_issue.get("issue", "")):
                     is_duplicate = True
                     break
-        
+
         if not is_duplicate:
             merged.append(ai_issue)
-    
+
     return merged
 
 

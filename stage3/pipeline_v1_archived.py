@@ -1,4 +1,8 @@
 """
+ARCHIVED — This file is no longer used.
+routes.py imports from stage3.enhanced_pipeline, not this module.
+Kept for reference. See enhanced_pipeline.py for the active implementation.
+
 Stage 3 Change Impact Analysis - LangGraph Agent Implementation
 Uses ReAct pattern to analyze repository changes and predict impact
 """

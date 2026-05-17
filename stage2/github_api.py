@@ -52,22 +52,30 @@ def get_issues(owner_repo: str, max_issues: int = 50) -> List[Dict]:
     issues = response.json()
     
     # Filter out pull requests (GitHub issues endpoint returns both)
+    # Also skip explicitly rejected issues — they are not active conflicts
+    REJECTION_LABELS = {"wontfix", "won't fix", "rejected", "declined", "invalid", "duplicate"}
+
     filtered_issues = []
     for item in issues:
-        # PRs have a 'pull_request' key
-        if "pull_request" not in item:
-            filtered_issues.append({
-                "number": item["number"],
-                "title": item["title"],
-                "body": (item.get("body") or "")[:500],  # Trim to 500 chars
-                "state": item["state"],
-                "url": item["html_url"],
-                "labels": [label["name"] for label in item.get("labels", [])]
-            })
-            
-            if len(filtered_issues) >= max_issues:
-                break
-    
+        if "pull_request" in item:
+            continue  # skip PRs
+
+        labels = [lbl["name"].lower() for lbl in item.get("labels", [])]
+        if any(lbl in REJECTION_LABELS for lbl in labels):
+            continue  # skip rejected issues
+
+        filtered_issues.append({
+            "number": item["number"],
+            "title": item["title"],
+            "body": (item.get("body") or "")[:500],  # Trim to 500 chars
+            "state": item["state"],
+            "url": item["html_url"],
+            "labels": [label["name"] for label in item.get("labels", [])]
+        })
+
+        if len(filtered_issues) >= max_issues:
+            break
+
     return filtered_issues
 
 

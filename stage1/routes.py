@@ -3,11 +3,12 @@ FastAPI routes for Stage 1 (Gap Finder)
 Handles HTTP endpoints for repository gap analysis
 """
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional
-from stage1.pipeline import run_stage1
-
+from shared.executor import get_executor
+from shared.errors import handle_pipeline_error
 
 router = APIRouter()
 
@@ -21,28 +22,19 @@ class Stage1Request(BaseModel):
 @router.post("/stage1/analyze")
 async def analyze_gaps(req: Stage1Request):
     """
-    Analyze a GitHub repository to identify contribution gaps
-    
-    Args:
-        req: Stage1Request containing repo_url and optional bob_response
-        
-    Returns:
-        JSON response with:
-        - repo: Repository identifier
-        - gaps: List of identified gaps (empty if no bob_response)
-        - prompt_for_bob: Prompt to copy to Bob IDE
-        - metadata: Pipeline execution metadata
-        
-    Raises:
-        HTTPException: 429 for rate limits, 500 for other errors
+    Analyze a GitHub repository to identify contribution gaps.
+
+    Returns JSON with gaps list and prompt_for_bob.
     """
     try:
-        result = run_stage1(req.repo_url, req.bob_response)
+        from stage1.pipeline import run_stage1
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            get_executor(),
+            lambda: run_stage1(req.repo_url, req.bob_response)
+        )
         return result
     except Exception as e:
-        if "rate limit" in str(e).lower():
-            raise HTTPException(429, "GitHub rate limit hit. Try again later.")
-        raise HTTPException(500, str(e))
-
+        raise handle_pipeline_error(e, "stage1")
 
 # Made with Bob

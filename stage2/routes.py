@@ -3,10 +3,11 @@ FastAPI routes for Stage 2 (Idea Deduplication)
 Handles HTTP endpoints for contribution idea conflict detection
 """
 
-from fastapi import APIRouter, HTTPException
+import asyncio
+from fastapi import APIRouter
 from pydantic import BaseModel
-from stage2.pipeline import run_stage2
-
+from shared.executor import get_executor
+from shared.errors import handle_pipeline_error
 
 router = APIRouter()
 
@@ -20,23 +21,19 @@ class Stage2Request(BaseModel):
 @router.post("/stage2/deduplicate")
 async def deduplicate_idea(req: Stage2Request):
     """
-    Check if a contribution idea conflicts with existing GitHub issues/PRs
-    
-    Args:
-        req: Stage2Request containing repo_url and idea
-        
-    Returns:
-        JSON response with semantic matches and Bob prompt
-        
-    Raises:
-        HTTPException: 429 for rate limits, 500 for other errors
+    Check if a contribution idea conflicts with existing GitHub issues/PRs.
+
+    Returns semantic matches and a recommendation.
     """
     try:
-        result = run_stage2(req.repo_url, req.idea)
+        from stage2.pipeline import run_stage2
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            get_executor(),
+            lambda: run_stage2(req.repo_url, req.idea)
+        )
         return result
     except Exception as e:
-        if "rate limit" in str(e).lower():
-            raise HTTPException(429, "GitHub rate limit hit. Try again later.")
-        raise HTTPException(500, str(e))
+        raise handle_pipeline_error(e, "stage2")
 
 # Made with Bob

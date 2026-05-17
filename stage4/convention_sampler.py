@@ -4,7 +4,38 @@ Fetches representative files to establish repository coding conventions
 """
 
 from typing import Dict, List
+from collections import defaultdict
 from stage4.github_api import get_tree, get_file_content, find_similar_files_in_tree
+
+
+def _index_tree_by_directory(tree: List[Dict]) -> Dict[str, List[str]]:
+    """Pre-index tree by directory for O(1) lookups."""
+    by_dir: Dict[str, List[str]] = defaultdict(list)
+    for item in tree:
+        if item.get("type") == "blob":
+            path = item["path"]
+            parts = path.rsplit("/", 1)
+            directory = parts[0] if len(parts) > 1 else ""
+            by_dir[directory].append(path)
+    return dict(by_dir)
+
+
+def _find_similar_fast(
+    tree_index: Dict[str, List[str]],
+    target_file: str,
+    max_results: int = 3
+) -> List[str]:
+    """O(1) lookup of similar files from pre-built directory index."""
+    parts = target_file.rsplit("/", 1)
+    directory = parts[0] if len(parts) > 1 else ""
+    extension = "." + target_file.rsplit(".", 1)[-1] if "." in target_file else ""
+
+    candidates = tree_index.get(directory, [])
+    similar = [
+        p for p in candidates
+        if p != target_file and (not extension or p.endswith(extension))
+    ]
+    return similar[:max_results]
 
 
 def sample_convention_files(
@@ -36,35 +67,35 @@ def sample_convention_files(
     """
     print(f"[Stage 4] Fetching repository tree for convention sampling...")
     tree = get_tree(owner_repo)
-    
+
+    # Pre-index tree once — avoids O(n) linear scan per changed file
+    tree_index = _index_tree_by_directory(tree)
+
     conventions = {}
-    
+
     for changed_file in changed_files:
         print(f"[Stage 4] Sampling conventions for {changed_file}...")
-        
-        # Find similar files in the repository
-        similar_files = find_similar_files_in_tree(tree, changed_file, max_results=samples_per_file)
-        
+
+        similar_files = _find_similar_fast(tree_index, changed_file, max_results=samples_per_file)
+
         samples = []
         for similar_file in similar_files:
-            # Fetch file content
             content = get_file_content(owner_repo, similar_file)
-            
+
             if content:
-                # Trim to max_lines
                 lines = content.split("\n")
                 trimmed_content = "\n".join(lines[:max_lines])
-                
+
                 samples.append({
                     "path": similar_file,
                     "content": trimmed_content,
                     "lines": len(lines)
                 })
-                
+
                 print(f"  ✓ Sampled {similar_file} ({len(lines)} lines)")
-        
+
         conventions[changed_file] = samples
-    
+
     return conventions
 
 
