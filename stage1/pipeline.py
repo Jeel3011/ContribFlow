@@ -4,8 +4,27 @@ Coordinates GitHub API fetching, data trimming, suspiciousness scoring, and prom
 """
 
 import re
+import os
+import json
 from datetime import datetime, timezone
+from pydantic import BaseModel, Field
 from typing import Optional
+
+class Stage1Gap(BaseModel):
+    title: str = Field(description="One-line description of the gap")
+    file: str = Field(description="path/to/file.py")
+    impact: str = Field(description="high|medium|low")
+    category: str = Field(description="error-handling|test-coverage|todo-fixme|deprecated-deps|unimplemented")
+    reasoning: str = Field(description="2-3 sentences explaining the gap")
+    id: str = Field(description="Unique ID e.g. 'gap_001'")
+    evidence: str = Field(description="The exact snippet of code showing the gap")
+    line_range: str = Field(description="The line number or range, e.g., '10-15'")
+    estimated_effort: str = Field(description="low|medium|high")
+    good_first_issue: bool = Field(description="Whether this is a good first issue")
+
+class Stage1Response(BaseModel):
+    repo: str
+    gaps: list[Stage1Gap]
 
 from stage1.github_api import get_tree, get_commits, get_issues, get_file_content
 from stage1.data_trimmer import (
@@ -159,19 +178,23 @@ def run_stage1(repo_url: str, bob_response: Optional[str] = None) -> dict:
         print("[Stage 1] Invoking AI Agent to analyze gaps...")
         try:
             from langchain_openai import ChatOpenAI
-            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-            bob_response = llm.invoke(prompt).content
+            llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Stage1Response)
+            # We don't use the raw string response parser anymore
+            parsed = llm.invoke(prompt)
+            if parsed:
+                # Convert pydantic models to dicts
+                gaps = [g.dict() for g in parsed.gaps]
         except Exception as e:
             print(f"[Stage 1] Warning: LLM call failed: {e}")
 
     if bob_response:
+        # Fallback if someone passed in a hardcoded string response (e.g. for testing)
         print("[Stage 1] Parsing Agent response...")
         parsed = parse_stage1_response(bob_response, owner_repo)
         gaps = parsed.get("gaps", [])
-        print(f"[Stage 1] Identified {len(gaps)} gaps")
+        gaps = _enrich_gaps(gaps)
     
-    # Enrich gaps with spec-required fields
-    gaps = _enrich_gaps(gaps)
+    print(f"[Stage 1] Identified {len(gaps)} gaps")
 
     # Build summary counts
     summary = {

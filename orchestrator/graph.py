@@ -343,6 +343,7 @@ def run_orchestrator_sync(
     Synchronous orchestrator execution.
     Returns the full final state including all stage results and events.
     """
+    repo_url = repo_url.strip()
     owner_repo = repo_url.replace("https://github.com/", "").strip("/")
 
     initial_state: OrchestratorState = {

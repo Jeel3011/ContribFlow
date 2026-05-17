@@ -6,7 +6,21 @@ Coordinates GitHub API fetching, semantic matching, and prompt building
 from stage2.github_api import get_issues, get_pull_requests
 from stage2.semantic_matcher import get_top_matches
 from stage2.prompt_builder import build_stage2_prompt, assemble_stage2_context
+import json
+import logging
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel, Field
 
+logger = logging.getLogger(__name__)
+
+class ConflictVerdict(BaseModel):
+    number: int = Field(description="The issue or PR number")
+    verdict: str = Field(description="'conflict', 'complementary', or 'unrelated'")
+    summary: str = Field(description="1-2 sentences explaining why it is a conflict or complementary")
+
+class Stage2LLMResponse(BaseModel):
+    verdicts: list[ConflictVerdict]
 
 def _build_recommendation(status: str, conflicts: list, idea: str) -> tuple[str, str]:
     """Build recommendation code and human-readable text per IO Design spec"""
@@ -74,52 +88,71 @@ def run_stage2(repo_url: str, idea: str) -> dict:
     status = "clear"
     has_complementary = False
     
-    for match in top_matches:
-        similarity = match["similarity"]
-        match_type = match["type"]
-        state = match["state"]
-        merged = match.get("merged", False)
+    if top_matches:
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Stage2LLMResponse)
         
-        # Determine if this is a real conflict
-        is_conflict = False
-        summary = ""
+        candidates_json = json.dumps([
+            {"number": m["number"], "type": m["type"], "title": m["title"], "state": m["state"], "url": m["url"], "similarity": m["similarity"], "merged": m.get("merged", False)}
+            for m in top_matches
+        ], indent=2)
         
-        if similarity >= 0.7:
-            # High similarity - likely conflict
-            if state == "open":
-                is_conflict = True
-                summary = f"This {match_type} is currently open and directly addresses the same functionality."
-            elif match_type == "pr" and merged:
-                is_conflict = True
-                summary = f"This PR was already merged, implementing similar functionality."
-            elif state == "closed" and match_type == "issue":
-                # Check if it was rejected or completed
-                labels = match.get("labels", [])
-                if any(label in ["wontfix", "rejected", "invalid"] for label in labels):
-                    summary = f"This issue was closed as '{labels[0]}' - your idea may still be viable."
-                else:
-                    is_conflict = True
-                    summary = f"This issue was closed, possibly already resolved."
-        elif similarity >= 0.5:
-            # Medium similarity - complementary or related
-            if state == "open":
-                summary = f"This {match_type} is related but focuses on a different aspect."
-                has_complementary = True
+        prompt_text = f"""Given this contribution idea: "{idea}"
         
-        if is_conflict:
-            status = "conflict"
-            conflicts.append({
-                "type": match_type,
-                "number": match["number"],
-                "url": match["url"],
-                "title": match["title"],
-                "state": state,
-                "assigned": bool(match.get("assignee")),
-                "assignee": match.get("assignee", None),
-                "similarity": round(similarity, 2),
-                "summary": summary,
-                "recommendation": "comment" if state == "open" else "reference"
-            })
+And these existing issues/PRs from {owner_repo}:
+{candidates_json}
+
+For each candidate, classify as:
+- "conflict": Directly overlaps, doing this would be duplicate work (especially if open or recently merged)
+- "complementary": Related but adds distinct value
+- "unrelated": False positive, not actually related
+
+Provide a summary explaining why.
+"""
+        try:
+            llm_result = llm.invoke([HumanMessage(content=prompt_text)])
+            verdict_map = {v.number: v for v in llm_result.verdicts}
+            
+            for match in top_matches:
+                v = verdict_map.get(match["number"])
+                if not v:
+                    continue
+                    
+                if v.verdict == "conflict":
+                    status = "conflict"
+                    conflicts.append({
+                        "type": match["type"],
+                        "number": match["number"],
+                        "url": match["url"],
+                        "title": match["title"],
+                        "state": match["state"],
+                        "assigned": bool(match.get("assignee")),
+                        "assignee": match.get("assignee", None),
+                        "similarity": round(match["similarity"], 2),
+                        "summary": v.summary,
+                        "recommendation": "comment" if match["state"] == "open" else "reference"
+                    })
+                elif v.verdict == "complementary":
+                    has_complementary = True
+                    # Optional: Include complementary in conflicts list? Spec says 'conflicts' array. 
+                    # We'll just set the flag to upgrade status to complementary if no conflicts.
+        except Exception as e:
+            logger.error(f"LLM verification failed: {e}")
+            # Fallback to simple threshold if LLM fails
+            for match in top_matches:
+                if match["similarity"] >= 0.7:
+                    status = "conflict"
+                    conflicts.append({
+                        "type": match["type"],
+                        "number": match["number"],
+                        "url": match["url"],
+                        "title": match["title"],
+                        "state": match["state"],
+                        "assigned": bool(match.get("assignee")),
+                        "assignee": match.get("assignee", None),
+                        "similarity": round(match["similarity"], 2),
+                        "summary": "Likely conflict based on semantic similarity.",
+                        "recommendation": "comment"
+                    })
 
     # Set status based on findings
     if status != "conflict" and has_complementary:

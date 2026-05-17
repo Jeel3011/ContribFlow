@@ -9,6 +9,21 @@ from typing import TypedDict, Annotated, Sequence, Literal
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from pydantic import BaseModel, Field
+
+class Finding(BaseModel):
+    finding: str = Field(description="Description of the finding")
+    confidence: float = Field(description="Confidence score 0.0 to 1.0")
+    type: str = Field(description="'direct' or 'indirect' or 'dynamic'")
+    evidence_files: list[str] = Field(description="List of files providing evidence")
+    
+class Stage3LLMResponse(BaseModel):
+    files_affected: list[str] = Field(description="List of all affected file paths")
+    services_at_risk: list[str] = Field(description="List of services/components at risk")
+    tests_to_update: list[str] = Field(description="List of test files that need updating")
+    findings: list[Finding] = Field(description="List of impact findings")
+    suggested_order: list[str] = Field(description="Suggested order of work")
+    dependency_traces: dict[str, str] = Field(description="A map of file paths to a 1-sentence explanation of why it is affected (e.g., 'X is affected because it imports Y')")
 
 from stage3.github_search import GitHubSearchClient, extract_keywords_from_description
 from stage3.github_api import get_tree, get_file_content
@@ -89,8 +104,14 @@ Do NOT include generic terms like "config", "node", "service".
         intent = json.loads(content)
         
         # Only use specific core entities, ignoring generic auto-keywords
-        state["search_keywords"] = intent.get("core_entities", [])[:5]
-
+        extracted_keywords = intent.get("core_entities", [])[:5]
+        
+        # Fallback to auto-extracted keywords if LLM found nothing specific
+        if not extracted_keywords:
+            logger.info("LLM found 0 core entities. Falling back to regex auto-keywords.")
+            extracted_keywords = auto_keywords[:10]
+            
+        state["search_keywords"] = extracted_keywords
         
         logger.info(f"Extracted {len(state['search_keywords'])} keywords: {state['search_keywords']}")
         
@@ -98,6 +119,13 @@ Do NOT include generic terms like "config", "node", "service".
         logger.error(f"Intent extraction failed: {e}")
         state["search_keywords"] = auto_keywords[:10]
     
+    # If still empty (e.g. no auto keywords either), add a generic search term based on the description
+    if not state["search_keywords"]:
+        logger.warning("No keywords found at all. Using fallback term.")
+        # Try to find a long word in description
+        words = [w for w in state["change_description"].split() if len(w) > 4]
+        state["search_keywords"] = [words[0]] if words else ["main"]
+
     state["iteration"] = 0
     state["max_iterations"] = 2
     
@@ -135,17 +163,6 @@ def github_search_node(state: EnhancedAgentState) -> EnhancedAgentState:
     state["search_results"] = sorted_results
     state["target_files"] = [r["path"] for r in sorted_results[:60]]  # Increased to 60 for better recall
     
-    # DEMO HACK: If we're testing PR 1395, ensure the historical files are included
-    if "Fixes #1364" in state.get("change_description", "") and state.get("owner_repo") == "Tracer-Cloud/opensre":
-        try:
-            from stage3.ground_truth_pr1395 import GROUND_TRUTH_PR1395
-            for f in GROUND_TRUTH_PR1395["files_changed"]:
-                if f not in state["target_files"]:
-                    state["target_files"].insert(0, f)
-            logger.info("Injected historical PR files for demo validation")
-        except Exception:
-            pass
-            
     logger.info(f"Found {len(sorted_results)} files, using top {len(state['target_files'])}")
     
     return state
@@ -248,9 +265,9 @@ def impact_analysis_node(state: EnhancedAgentState) -> EnhancedAgentState:
             context["file_samples"][file_path] = "\n".join(lines)
     
     # LLM analysis with structured output
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).with_structured_output(Stage3LLMResponse)
     
-    prompt = f"""Analyze the impact of this code change and return ONLY valid JSON (no markdown, no explanation).
+    prompt = f"""Analyze the impact of this code change and determine the blast radius.
 
 Change Description:
 {state['change_description']}
@@ -267,40 +284,32 @@ Confidence Scores:
 File Content Samples (first 50 lines of relevant files):
 {json.dumps(context["file_samples"], indent=2)}
 
-IMPORTANT: Return ONLY a valid JSON object with this exact structure:
-{{
-    "files_affected": ["file1.py", "file2.py"],
-    "services_at_risk": ["ServiceName1"],
-    "tests_to_update": ["test_file1.py"],
-    "findings": [
-        {{
-            "finding": "Description",
-            "confidence": 0.95,
-            "type": "direct",
-            "evidence_files": ["file.py"]
-        }}
-    ],
-    "suggested_order": ["Step 1", "Step 2"]
-}}
+CRITICAL INSTRUCTIONS:
 
-Rules:
-- Include ALL files from target_files
-- Include ALL files from reverse dependencies
-- If you see any files that were in the ground truth for this PR, INCLUDE THEM.
-- Return ONLY the JSON object, no other text"""
+1. files_affected: Include ALL files from target_files AND reverse dependencies that are relevant.
+
+2. services_at_risk: Identify the high-level components/services/modules that would be affected.
+   A "service" is a logical component like "ChatAgent", "Pipeline Runner", "Auth Module", "API Gateway", "Test Suite", "Configuration System", "CLI Interface", etc.
+   Look at the directory structure (e.g. app/agent/ = "Agent Service", app/pipeline/ = "Pipeline Service", tests/ = "Test Suite").
+   There should almost ALWAYS be at least 1-3 services at risk for any non-trivial change. Do NOT return an empty list.
+
+3. dependency_traces: For EVERY file in files_affected, provide a 1-sentence explanation of WHY it is affected.
+   Examples:
+   - "app/agent/chat.py": "Directly modified — contains the ChatAgent message routing logic"
+   - "app/agent/__init__.py": "Re-exports ChatAgent, will need import updates if class is renamed"
+   - "tests/test_chat.py": "Test file for chat.py — test cases will need updating"
+   - "app/pipeline/pipeline.py": "Imports ChatAgent from app/agent — downstream consumer"
+   EVERY file MUST have a trace entry. Do not leave any file without a trace.
+
+4. findings: Provide specific, actionable findings about the impact.
+"""
     
     try:
         response = llm.invoke([HumanMessage(content=prompt)])
-        content = response.content if isinstance(response.content, str) else str(response.content)
         
-        # Extract JSON from markdown if present
-        if "```json" in content:
-            content = content.split("```json")[1].split("```")[0].strip()
-        elif "```" in content:
-            content = content.split("```")[1].split("```")[0].strip()
+        # Convert Pydantic object to dict
+        output = response.dict()
         
-        output = json.loads(content)
-
         # Add repo info and spec-required fields
         output["repo"] = state["owner_repo"]
         output["change_description"] = state["change_description"]

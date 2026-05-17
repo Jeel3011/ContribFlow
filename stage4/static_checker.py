@@ -4,7 +4,13 @@ Runs deterministic checks BEFORE Bob to save tokens
 """
 
 import re
+import json
+import subprocess
+import tempfile
+import logging
 from typing import List, Dict
+
+logger = logging.getLogger(__name__)
 
 
 def run_static_checks(parsed_diff: Dict) -> List[Dict]:
@@ -44,6 +50,7 @@ def run_static_checks(parsed_diff: Dict) -> List[Dict]:
         # Run language-specific checks
         if language == "python":
             issues.extend(check_python_code(added_code, file_path))
+            issues.extend(run_ruff_check(added_code, file_path))
         elif language in ["javascript", "typescript"]:
             issues.extend(check_javascript_code(added_code, file_path))
         
@@ -87,6 +94,39 @@ def check_python_code(code: str, file_path: str) -> List[Dict]:
     # Check for long functions
     issues.extend(check_long_functions(code, file_path))
     
+    return issues
+
+def run_ruff_check(code: str, file_path: str) -> List[Dict]:
+    """Run ruff on changed files for real deterministic linting results"""
+    issues = []
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".py", mode="w", delete=False) as f:
+            f.write(code)
+            f.flush()
+            
+            result = subprocess.run(
+                ["ruff", "check", f.name, "--output-format=json", "--select=E,W,F,I"],
+                capture_output=True, text=True, timeout=10
+            )
+            
+            import os
+            os.unlink(f.name)
+            
+        if result.stdout:
+            ruff_issues = json.loads(result.stdout)
+            for issue in ruff_issues:
+                issues.append({
+                    "severity": "error" if issue.get("code", "").startswith("E") else "warning",
+                    "file": file_path,
+                    "line": str(issue.get("location", {}).get("row", 1)),
+                    "issue": f"[ruff {issue.get('code')}] {issue.get('message')}",
+                    "fix": issue.get("fix", {}).get("message", "See ruff documentation") if issue.get("fix") else "N/A",
+                    "source": "static",
+                    "category": "convention-violation"
+                })
+    except Exception as e:
+        logger.warning(f"Ruff check failed for {file_path}: {e}")
+        
     return issues
 
 

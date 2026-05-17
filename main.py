@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()  # Load .env before anything else
+
 from fastapi import FastAPI
 from stage1.routes import router as stage1_router
 from stage2.routes import router as stage2_router
